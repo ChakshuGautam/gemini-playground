@@ -29,6 +29,16 @@
       font-family: inherit; resize: vertical; min-height: 60px;
     }
     #prompt:focus { outline: none; border-color: #3b82f6; }
+    #mode-area {
+      width: 100%; max-width: 600px; margin-bottom: 1rem;
+      display: flex; align-items: center; gap: 0.75rem;
+    }
+    #mode-area label { font-size: 0.75rem; color: #94a3b8; }
+    #mode-area select {
+      padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid #334155;
+      background: #1e293b; color: #e2e8f0; font-size: 0.85rem;
+    }
+    #mode-info { font-size: 0.7rem; color: #64748b; }
     .buttons { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }
     button {
       padding: 0.75rem 2rem; border-radius: 8px; border: none;
@@ -61,6 +71,14 @@
     <label for="prompt">System Prompt</label>
     <textarea id="prompt">You are a color assistant. When the user says a color, repeat that color back and suggest another color they could try next. Keep responses to one short sentence. Start by saying a color.</textarea>
   </div>
+  <div id="mode-area">
+    <label for="mode">Color Detection Mode</label>
+    <select id="mode">
+      <option value="transcription">Transcription Parsing (fast)</option>
+      <option value="rpc">Function Call + RPC (structured)</option>
+    </select>
+    <span id="mode-info">Parses color from transcription text client-side</span>
+  </div>
   <div class="buttons">
     <button id="connect">Connect</button>
     <button id="disconnect">Disconnect</button>
@@ -75,8 +93,16 @@
     const connectBtn = document.getElementById('connect');
     const disconnectBtn = document.getElementById('disconnect');
     const promptEl = document.getElementById('prompt');
+    const modeEl = document.getElementById('mode');
+    const modeInfo = document.getElementById('mode-info');
     const transEl = document.getElementById('transcriptions');
     let room = null;
+
+    modeEl.addEventListener('change', () => {
+      modeInfo.textContent = modeEl.value === 'transcription'
+        ? 'Parses color from transcription text client-side'
+        : 'Gemini calls set_color tool → agent sends RPC to browser';
+    });
 
     const segments = {};
 
@@ -97,6 +123,8 @@
     connectBtn.addEventListener('click', async () => {
       connectBtn.disabled = true;
       promptEl.disabled = true;
+      modeEl.disabled = true;
+      const useRPC = modeEl.value === 'rpc';
       statusEl.textContent = 'Connecting...';
       statusEl.className = '';
 
@@ -114,6 +142,7 @@
               temperature: 0.3,
               maxOutputTokens: "inf",
               nanoBananaEnabled: false,
+              setColorEnabled: useRPC,
             }
           })
         });
@@ -135,6 +164,7 @@
           connectBtn.disabled = false;
           disconnectBtn.style.display = 'none';
           promptEl.disabled = false;
+          modeEl.disabled = false;
           room = null;
           // Clear transcriptions for next session
           Object.keys(segments).forEach(k => delete segments[k]);
@@ -152,6 +182,8 @@
           track.detach().forEach(el => el.remove());
         });
 
+        const CSS_COLORS = ['red','orange','yellow','green','blue','purple','pink','cyan','teal','magenta','coral','gold','salmon','lime','navy','maroon','olive','aqua','indigo','violet','turquoise','crimson','tomato','sienna','orchid','plum','khaki','lavender','beige','ivory','silver','gray','grey','white','black','brown'];
+
         room.on(LivekitClient.RoomEvent.TranscriptionReceived, (segs, participant) => {
           const isAgent = participant?.isAgent || false;
           for (const seg of segs) {
@@ -161,19 +193,33 @@
               final: seg.final,
               time: segments[seg.id]?.time || Date.now(),
             };
+
+            // Parse color from agent transcription (only in transcription mode)
+            if (isAgent && !useRPC) {
+              const words = seg.text.toLowerCase().split(/\s+/);
+              for (const word of words) {
+                const clean = word.replace(/[^a-z]/g, '');
+                if (CSS_COLORS.includes(clean)) {
+                  console.log('[transcription mode] Color detected:', clean);
+                  document.body.style.backgroundColor = clean;
+                  break;
+                }
+              }
+            }
           }
           renderTranscriptions();
         });
 
         await room.connect(url, accessToken);
 
-        room.localParticipant.registerRpcMethod('pg.setColor', async (data) => {
-          console.log('RPC received raw:', data.payload);
-          const { color } = JSON.parse(data.payload);
-          console.log('set_color called with:', color);
-          document.body.style.backgroundColor = color;
-          return JSON.stringify({ ok: true });
-        });
+        if (useRPC) {
+          room.localParticipant.registerRpcMethod('pg.setColor', async (data) => {
+            const { color } = JSON.parse(data.payload);
+            console.log('[rpc mode] Color received:', color);
+            document.body.style.backgroundColor = color;
+            return JSON.stringify({ ok: true });
+          });
+        }
 
         await room.localParticipant.setMicrophoneEnabled(true);
       } catch (err) {
@@ -181,6 +227,7 @@
         statusEl.className = '';
         connectBtn.disabled = false;
         promptEl.disabled = false;
+        modeEl.disabled = false;
       }
     });
 

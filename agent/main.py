@@ -44,6 +44,7 @@ class SessionConfig:
     max_response_output_tokens: str | int
     modalities: list[str]
     nano_banana_enabled: bool = False
+    set_color_enabled: bool = False
 
     def to_dict(self):
         return {k: v for k, v in asdict(self).items() if k != "gemini_api_key"}
@@ -88,6 +89,7 @@ def parse_session_config(data: Dict[str, Any]) -> SessionConfig:
             data.get("modalities", "audio_only")
         ),
         nano_banana_enabled=nano_banana_enabled,
+        set_color_enabled=data.get("set_color_enabled", False) in (True, "true", "True"),
     )
     return config
 
@@ -258,8 +260,11 @@ class SessionManager:
         self.ctx = ctx
         self.participant = participant
         
-        # Always add set_color tool
-        tools = [create_set_color_tool(self)]
+        # Conditionally add tools
+        tools = []
+        if self.current_config.set_color_enabled:
+            logger.info("set_color tool enabled")
+            tools.append(create_set_color_tool(self))
         if self.current_config.nano_banana_enabled:
             logger.info("Nano Banana tool enabled 🍌")
             tools.append(create_generate_image_tool(self))
@@ -350,8 +355,9 @@ class SessionManager:
         # End current session
         await self.current_session.aclose()
         
-        # Always add set_color tool
-        tools = [create_set_color_tool(self)]
+        tools = []
+        if config.set_color_enabled:
+            tools.append(create_set_color_tool(self))
         if config.nano_banana_enabled:
             tools.append(create_generate_image_tool(self))
         
