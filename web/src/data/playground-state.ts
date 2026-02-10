@@ -10,6 +10,7 @@ export interface SessionConfig {
   temperature: number;
   maxOutputTokens: number | null;
   nanoBananaEnabled: boolean;
+  setColorEnabled?: boolean;
 }
 
 export interface PlaygroundState {
