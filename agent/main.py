@@ -113,6 +113,47 @@ async def entrypoint(ctx: JobContext):
     logger.info("agent started")
 
 
+def create_set_color_tool(session_manager):
+    """Factory function to create the set_color tool"""
+
+    raw_schema = {
+        "type": "function",
+        "name": "set_color",
+        "description": "Change the UI background color. Call this whenever the user mentions a color or you want to suggest a color.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "color": {
+                    "type": "string",
+                    "description": "A CSS color value (e.g., 'red', '#ff6347', 'rgb(100, 200, 50)', 'coral')"
+                }
+            },
+            "required": ["color"],
+            "additionalProperties": False
+        }
+    }
+
+    @function_tool(raw_schema=raw_schema)
+    async def set_color(raw_arguments: dict) -> str:
+        color = raw_arguments["color"]
+        logger.info(f"set_color called with: {color}")
+
+        try:
+            if session_manager.ctx and session_manager.participant:
+                await session_manager.ctx.room.local_participant.perform_rpc(
+                    destination_identity=session_manager.participant.identity,
+                    method="pg.setColor",
+                    payload=json.dumps({"color": color}),
+                )
+                logger.info(f"Color RPC sent: {color}")
+                return f"Color changed to {color}"
+        except Exception as e:
+            logger.error(f"Failed to send color: {e}")
+            return f"Failed to change color: {e}"
+
+    return set_color
+
+
 def create_generate_image_tool(session_manager):
     """Factory function to create the generate_image tool with access to session_manager"""
 
@@ -217,12 +258,12 @@ class SessionManager:
         self.ctx = ctx
         self.participant = participant
         
-        # Conditionally add nano banana tool
-        tools = []
+        # Always add set_color tool
+        tools = [create_set_color_tool(self)]
         if self.current_config.nano_banana_enabled:
             logger.info("Nano Banana tool enabled 🍌")
             tools.append(create_generate_image_tool(self))
-        
+
         self.current_session = self.create_session(self.current_config)
         self.current_agent = PlaygroundAgent(
             instructions=self.current_config.instructions,
@@ -309,8 +350,8 @@ class SessionManager:
         # End current session
         await self.current_session.aclose()
         
-        # Conditionally add nano banana tool
-        tools = []
+        # Always add set_color tool
+        tools = [create_set_color_tool(self)]
         if config.nano_banana_enabled:
             tools.append(create_generate_image_tool(self))
         

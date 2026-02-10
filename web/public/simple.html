@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini Voice</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f172a; color: #e2e8f0;
+      min-height: 100vh; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; padding: 2rem;
+      transition: background-color 0.5s ease;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 1.5rem; font-weight: 300; }
+    #status {
+      font-size: 0.9rem; margin-bottom: 1rem; padding: 0.5rem 1.5rem;
+      border-radius: 999px; background: #1e293b; color: #64748b;
+    }
+    #status.connected { background: #064e3b; color: #6ee7b7; }
+    #prompt-area {
+      width: 100%; max-width: 600px; margin-bottom: 1rem;
+    }
+    #prompt-area label { font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.3rem; }
+    #prompt {
+      width: 100%; padding: 0.6rem; border-radius: 8px; border: 1px solid #334155;
+      background: #1e293b; color: #e2e8f0; font-size: 0.85rem;
+      font-family: inherit; resize: vertical; min-height: 60px;
+    }
+    #prompt:focus { outline: none; border-color: #3b82f6; }
+    .buttons { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }
+    button {
+      padding: 0.75rem 2rem; border-radius: 8px; border: none;
+      background: #3b82f6; color: white; font-size: 1rem;
+      cursor: pointer;
+    }
+    button:hover { background: #2563eb; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #disconnect { background: #dc2626; display: none; }
+    #disconnect:hover { background: #b91c1c; }
+    #transcriptions {
+      width: 100%; max-width: 600px; min-height: 200px;
+      background: #1e293b; border-radius: 12px; padding: 1.5rem;
+      overflow-y: auto; max-height: 60vh;
+    }
+    .msg {
+      padding: 0.5rem 0; border-bottom: 1px solid #334155;
+      line-height: 1.6; font-size: 0.95rem;
+    }
+    .msg.agent { color: #6ee7b7; }
+    .msg.user { color: #93c5fd; }
+    .msg .label { font-size: 0.7rem; text-transform: uppercase; opacity: 0.6; margin-right: 0.5rem; }
+    .msg .ts { font-size: 0.65rem; opacity: 0.4; margin-right: 0.5rem; font-family: 'SF Mono', monospace; }
+  </style>
+</head>
+<body>
+  <h1>Gemini Voice Chat</h1>
+  <div id="status">Click connect to start</div>
+  <div id="prompt-area">
+    <label for="prompt">System Prompt</label>
+    <textarea id="prompt">You are a color assistant. When the user says a color, repeat that color back and suggest another color they could try next. Keep responses to one short sentence. Start by saying a color.</textarea>
+  </div>
+  <div class="buttons">
+    <button id="connect">Connect</button>
+    <button id="disconnect">Disconnect</button>
+  </div>
+  <div id="transcriptions"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.js"></script>
+  <script>
+    const GOOGLE_API_KEY = 'AIzaSyB54RmNTp1LYnQDjp-Lo9BgN0wrEJ0tkFM';
+
+    const statusEl = document.getElementById('status');
+    const connectBtn = document.getElementById('connect');
+    const disconnectBtn = document.getElementById('disconnect');
+    const promptEl = document.getElementById('prompt');
+    const transEl = document.getElementById('transcriptions');
+    let room = null;
+
+    const segments = {};
+
+    function renderTranscriptions() {
+      const sorted = Object.values(segments).sort((a, b) => a.time - b.time);
+      transEl.innerHTML = '';
+      for (const seg of sorted) {
+        const div = document.createElement('div');
+        div.className = 'msg ' + (seg.isAgent ? 'agent' : 'user');
+        const label = seg.isAgent ? 'Gemini' : 'You';
+        const ts = new Date(seg.time).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        div.innerHTML = `<span class="ts">${ts}</span><span class="label">${label}</span>${seg.text}`;
+        transEl.appendChild(div);
+      }
+      transEl.scrollTop = transEl.scrollHeight;
+    }
+
+    connectBtn.addEventListener('click', async () => {
+      connectBtn.disabled = true;
+      promptEl.disabled = true;
+      statusEl.textContent = 'Connecting...';
+      statusEl.className = '';
+
+      try {
+        const resp = await fetch('/api/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            instructions: promptEl.value.trim(),
+            geminiAPIKey: GOOGLE_API_KEY,
+            sessionConfig: {
+              model: "gemini-2.5-flash-native-audio-preview-12-2025",
+              modalities: "audio_only",
+              voice: "Puck",
+              temperature: 0.3,
+              maxOutputTokens: "inf",
+              nanoBananaEnabled: false,
+            }
+          })
+        });
+        const { accessToken, url } = await resp.json();
+
+        room = new LivekitClient.Room();
+
+        room.on(LivekitClient.RoomEvent.Connected, () => {
+          statusEl.textContent = 'Connected - speak anytime';
+          statusEl.className = 'connected';
+          connectBtn.style.display = 'none';
+          disconnectBtn.style.display = 'inline-block';
+        });
+
+        room.on(LivekitClient.RoomEvent.Disconnected, () => {
+          statusEl.textContent = 'Disconnected';
+          statusEl.className = '';
+          connectBtn.style.display = 'inline-block';
+          connectBtn.disabled = false;
+          disconnectBtn.style.display = 'none';
+          promptEl.disabled = false;
+          room = null;
+          // Clear transcriptions for next session
+          Object.keys(segments).forEach(k => delete segments[k]);
+          transEl.innerHTML = '';
+        });
+
+        room.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
+          if (track.kind === 'audio') {
+            const el = track.attach();
+            document.body.appendChild(el);
+          }
+        });
+
+        room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
+          track.detach().forEach(el => el.remove());
+        });
+
+        room.on(LivekitClient.RoomEvent.TranscriptionReceived, (segs, participant) => {
+          const isAgent = participant?.isAgent || false;
+          for (const seg of segs) {
+            segments[seg.id] = {
+              text: seg.text,
+              isAgent,
+              final: seg.final,
+              time: segments[seg.id]?.time || Date.now(),
+            };
+          }
+          renderTranscriptions();
+        });
+
+        await room.connect(url, accessToken);
+
+        room.localParticipant.registerRpcMethod('pg.setColor', async (data) => {
+          console.log('RPC received raw:', data.payload);
+          const { color } = JSON.parse(data.payload);
+          console.log('set_color called with:', color);
+          document.body.style.backgroundColor = color;
+          return JSON.stringify({ ok: true });
+        });
+
+        await room.localParticipant.setMicrophoneEnabled(true);
+      } catch (err) {
+        statusEl.textContent = 'Error: ' + err.message;
+        statusEl.className = '';
+        connectBtn.disabled = false;
+        promptEl.disabled = false;
+      }
+    });
+
+    disconnectBtn.addEventListener('click', () => {
+      if (room) room.disconnect();
+    });
+  </script>
+</body>
+</html>
